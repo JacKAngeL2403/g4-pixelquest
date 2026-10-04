@@ -1,9 +1,14 @@
-"""Capa 1 - Dominio (POO pura).
+"""
+Capa de Dominio - Pixel-Quest.
 
-Contiene: objetos (Item, Weapon, Armor, Accessory, Potion, Ether), Inventory,
-personajes (Character -> PartyMember -> Hero[Warrior, Mage, Rogue] / Companion
-[Cleric, Archer, Knight, Alchemist] ; Character -> Enemy -> Boss).
-No sabe nada de consola ni de archivos: solo reglas del juego.
+Contiene las entidades y reglas fundamentales del juego:
+objetos, inventario, personajes, héroes, compañeros, enemigos y jefes.
+
+Esta capa implementa la lógica propia del dominio mediante POO,
+herencia, encapsulamiento y polimorfismo.
+
+No depende de la consola, la interfaz de usuario ni de la persistencia
+de archivos.
 """
 from __future__ import annotations
 
@@ -38,9 +43,11 @@ def validate_name(name: str) -> str:
     return name
 
 
-# ---------------------------------------------------------------- OBJETOS
+# ==============================================================
+# OBJETOS Y EQUIPAMIENTO
+# ==============================================================
 class Item(ABC):
-    """Clase base abstracta de todos los objetos."""
+    """Clase base abstracta para todos los objetos utilizables o equipables."""
 
     KIND = "item"
 
@@ -230,7 +237,7 @@ def item_from_dict(data: Dict[str, Any]) -> Item:
 
 
 class Inventory:
-    """Mochila con capacidad limitada."""
+    """Gestiona los objetos que posee el héroe y controla su capacidad máxima."""
 
     def __init__(self, capacity: int = 10) -> None:
         if capacity <= 0:
@@ -268,9 +275,16 @@ class Inventory:
         return self._items.pop(index)
 
 
-# ------------------------------------------------------------- PERSONAJES
+# ==============================================================
+# JERARQUÍA DE PERSONAJES
+# ==============================================================
 class Character(ABC):
-    """Clase base abstracta: héroes y enemigos comparten combate básico."""
+    """
+    Clase base abstracta para los personajes del juego.
+
+    Define las reglas comunes de combate, estadísticas, daño,
+    curación y estado de vida.
+    """
 
     def __init__(self, name: str, max_hp: int, attack: int, defense: int, level: int = 1) -> None:
         clean_name = name.strip()
@@ -354,8 +368,10 @@ class Character(ABC):
         self._guarding = False
 
 class PartyMember(Character, ABC):
-    """Miembro del grupo (héroe o compañero): tiene MP, XP, subida de nivel y
-    una habilidad especial propia (polimorfismo)."""
+    """Clase base para los integrantes del grupo.
+
+        Gestiona MP, experiencia, progresión de nivel y habilidades
+        especiales implementadas mediante polimorfismo."""
 
     CLASS_KEY = "member"
     CLASS_NAME = "Aventurero"
@@ -480,7 +496,9 @@ class PartyMember(Character, ABC):
         self._xp = data["xp"]
 
 
-# ------------------------------------------------------------ COMPAÑEROS
+# ==============================================================
+# COMPAÑEROS
+# ==============================================================
 class Companion(PartyMember, ABC):
     """Aliado reclutable en la taberna (como los personajes de un JRPG).
     Sube de nivel con el héroe y actúa en su propio turno durante el combate."""
@@ -572,7 +590,9 @@ def companion_from_dict(data: Dict[str, Any]) -> Companion:
         raise SaveDataError("Datos de compañero inválidos en el guardado.") from exc
 
 
-# ---------------------------------------------------------------- HÉROES
+# ==============================================================
+# HÉROES Y CLASES JUGABLES
+# ==============================================================
 class Hero(PartyMember, ABC):
     """Héroe jugable (líder del grupo). Tiene inventario, equipo y oro."""
 
@@ -819,7 +839,9 @@ def hero_from_dict(data: Dict[str, Any]) -> Hero:
         raise SaveDataError("Datos de héroe inválidos en el guardado.") from exc
 
 
-# -------------------------------------------------------------- ENEMIGOS
+# ==============================================================
+# ENEMIGOS Y JEFES
+# ==============================================================
 class Enemy(Character):
     """Criatura enemiga con recompensas y tabla de botín."""
 
