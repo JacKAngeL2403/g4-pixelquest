@@ -1,5 +1,5 @@
 """Capa 2 - Servicios: lógica de casos de uso (crear héroe, explorar,
-combate por turnos en grupo con habilidades, tienda, taberna, inventario)."""
+combate por turnos en grupo, tienda, taberna, inventario)."""
 from __future__ import annotations
 
 import random
@@ -14,7 +14,6 @@ from src.domain.exceptions import (
     NotEnoughGoldError,
     PartyError,
     SaveDataError,
-    SkillError,
 )
 from src.domain.models import (
     COMPANION_CLASSES,
@@ -26,35 +25,28 @@ from src.domain.models import (
     Hero,
     PartyMember,
     Potion,
-    Scroll,
-    SecretBoss,
     Weapon,
     hero_from_dict,
     item_from_dict,
 )
-from src.domain.skills import SKILLS, STAT_LABELS, RARE_SKILL_KEYS, Skill, SkillEffect, get_skill
 from src.services.content import (
     BOSS_TEMPLATES,
     COST_PER_LEVEL,
     ENEMY_TEMPLATES,
     RECRUITS,
-    SECRET_BOSSES,
-    SECRET_GEAR,
-    next_unlock_floor,
-    secret_template,
     shop_catalog,
     shop_entries,
+    next_unlock_floor,
 )
 from src.services.data_manager import DataManager
 
 ROOMS_PER_FLOOR = 4
 FLEE_CHANCE = 0.5
-PARTY_HP_BONUS = 0.55    # +55% de HP enemigo por cada compañero extra
-SECRET_CHANCE = 0.12     # probabilidad de hallar una sala oculta por sala explorada
+PARTY_HP_BONUS = 0.55  # +55% de HP enemigo por cada compañero extra
 
 __all__ = [
-    "CombatEvent", "CombatSession", "Event", "GameService", "RecruitOffer", "SkillOption",
-    "shop_catalog", "shop_entries", "next_unlock_floor", "ROOMS_PER_FLOOR",
+    "CombatEvent", "CombatSession", "Event", "GameService", "RecruitOffer",
+    "shop_catalog", "shop_entries", "next_unlock_floor",
 ]
 
 
@@ -62,7 +54,7 @@ __all__ = [
 class Event:
     """Resultado de explorar una sala."""
 
-    kind: str  # "combat" | "boss" | "secret" | "treasure" | "fountain" | "shrine" | "trap"
+    kind: str  # "combat" | "boss" | "treasure" | "fountain" | "trap"
     message: str
     enemy: Optional[Enemy] = None
 
@@ -72,19 +64,9 @@ class CombatEvent:
     """Un suceso del combate. La interfaz gráfica lo usa para animar."""
 
     text: str
-    kind: str = "info"  # "info" | "hit" | "heal" | "buff" | "debuff" | "cast"
+    kind: str = "info"  # "info" | "hit" | "heal"
     target: Optional[Character] = None
     amount: int = 0
-    actor: Optional[Character] = None
-
-
-@dataclass
-class SkillOption:
-    """Una habilidad en el menú de 'Habilidades' (con o sin posibilidad de usarla ahora)."""
-
-    skill: Skill
-    enabled: bool
-    reason: str = ""
 
 
 @dataclass
@@ -100,27 +82,11 @@ class RecruitOffer:
     preview: Any = None  # Companion ya subido al nivel del héroe (para mostrar sus stats)
 
 
-def describe_effect(eff: SkillEffect) -> str:
-    """Texto de un efecto de habilidad (para el registro de combate)."""
-    name = eff.target.name
-    if eff.kind == "hit":
-        return f"{name} recibe {eff.amount} de daño."
-    if eff.kind == "heal":
-        return f"{name} recupera {eff.amount} HP."
-    if eff.kind == "mp":
-        return f"{name} recupera {eff.amount} MP."
-    if eff.kind == "revive":
-        return f"¡{name} vuelve a la vida con {eff.amount} HP!"
-    sign = "sube" if eff.kind == "buff" else "baja"
-    return f"{STAT_LABELS.get(eff.stat, eff.stat)} de {name} {sign} {eff.amount} por {eff.turns} turnos."
-
-
 class CombatSession:
     """Combate por turnos: todo el grupo del héroe contra un enemigo.
 
-    Cada ronda actúa, en orden, cada miembro vivo (`current_actor`) eligiendo
-    Atacar, una Habilidad, Defender, un Objeto o Huir; cuando todos actuaron,
-    el enemigo ataca a un miembro al azar.
+    Cada ronda actúa, en orden, cada miembro vivo (`current_actor`); cuando todos
+    terminaron, el enemigo ataca a un miembro al azar.
     """
 
     def __init__(self, hero: Hero, enemy: Enemy, rng: random.Random) -> None:
@@ -162,33 +128,8 @@ class CombatSession:
         return None
 
     def _emit(self, text: str, kind: str = "info", target: Optional[Character] = None,
-              amount: int = 0, actor: Optional[Character] = None) -> None:
-        self.events.append(CombatEvent(text, kind, target, amount, actor))
-
-    # ---- menú de habilidades
-    def skill_options(self) -> List[SkillOption]:
-        """Habilidades del miembro actual, indicando cuáles puede usar ahora y por qué no."""
-        actor = self.current_actor
-        if actor is None:
-            return []
-        out = []
-        for skill in actor.skills:
-            if actor.mp < skill.cost:
-                out.append(SkillOption(skill, False, "MP insuficiente"))
-            elif not skill.has_valid_target(actor, self.party):
-                reason = "Nadie caído" if skill.target == "fallen" else "Nadie lo necesita"
-                out.append(SkillOption(skill, False, reason))
-            else:
-                out.append(SkillOption(skill, True))
-        return out
-
-    def skill_targets(self, skill_key: str) -> List[int]:
-        """Índices del grupo a los que se puede lanzar la habilidad (si apunta a un aliado)."""
-        actor = self.current_actor
-        skill = get_skill(skill_key)
-        if actor is None or skill.target not in ("ally", "fallen"):
-            return []
-        return skill.valid_ally_targets(actor, self.party)
+              amount: int = 0) -> None:
+        self.events.append(CombatEvent(text, kind, target, amount))
 
     # ---- flujo de turnos
     def _act(self, action) -> List[str]:
@@ -199,7 +140,7 @@ class CombatSession:
         if actor is None:
             raise CombatError("No hay nadie que pueda actuar.")
         self.events = []
-        action(actor)  # puede lanzar un error ANTES de cambiar nada
+        action(actor)  # puede lanzar CombatError antes de cambiar nada
         self._after_action()
         return [e.text for e in self.events]
 
@@ -225,7 +166,7 @@ class CombatSession:
         if was_enraged:
             self._emit(f"¡{self.enemy.name} está furioso!")
         self._emit(f"{self.enemy.name} ataca y causa {dmg} de daño a {target.name}.",
-                   "hit", target, dmg, self.enemy)
+                   "hit", target, dmg)
         if not target.is_alive:
             self._emit(f"{target.name} ha caído en combate...")
 
@@ -233,8 +174,6 @@ class CombatSession:
         for m in self.party:
             if m.is_alive:
                 m.regen_mp(2)
-            m.tick_mods()
-        self.enemy.tick_mods()
         self.turn += 1
         self._cursor = self._next_alive(0)
 
@@ -244,42 +183,26 @@ class CombatSession:
             actor.stop_guard()
             dmg = actor.attack_target(self.enemy, self._rng)
             self._emit(f"{actor.name} ataca a {self.enemy.name} y causa {dmg} de daño.",
-                       "hit", self.enemy, dmg, actor)
+                       "hit", self.enemy, dmg)
         return self._act(action)
 
-    def player_skill(self, skill_key: str, target_index: Optional[int] = None) -> List[str]:
-        """Usa una habilidad conocida. Si apunta a un aliado, `target_index` es su posición en el grupo."""
+    def player_special(self) -> List[str]:
         def action(actor: PartyMember) -> None:
-            skill = get_skill(skill_key)
-            ally = None
-            if skill.target in ("ally", "fallen"):
-                if target_index is None or not 0 <= target_index < len(self.party):
-                    raise SkillError("Elige a un aliado.")
-                ally = self.party[target_index]
-            actor.stop_guard()
-            effects = actor.use_skill(skill_key, self.enemy, self.party, ally, self._rng)
-            self._emit(f"{actor.name} usa {skill.name}.", "cast", actor, 0, actor)
-            self._report(effects, actor)
-        return self._act(action)
-
-    def _report(self, effects: List[SkillEffect], actor: Character) -> None:
-        """Convierte los efectos de una habilidad en eventos (agrupa golpes seguidos)."""
-        i = 0
-        while i < len(effects):
-            eff = effects[i]
-            if eff.kind == "hit":
-                total, hits = eff.amount, 1
-                while i + 1 < len(effects) and effects[i + 1].kind == "hit" and effects[i + 1].target is eff.target:
-                    i += 1
-                    total += effects[i].amount
-                    hits += 1
-                text = f"{eff.target.name} recibe {total} de daño" + (f" ({hits} golpes)." if hits > 1 else ".")
-                self._emit(text, "hit", eff.target, total, actor)
+            if actor.SPECIAL_ON_ALLY:
+                hurt = [m for m in self.party if m.is_alive and m.hp < m.max_hp]
+                if not hurt:
+                    raise CombatError("Nadie necesita curación.")
+                target = min(hurt, key=lambda m: m.hp / m.max_hp)
+                actor.stop_guard()
+                amount = actor.special_attack(target, self._rng)  # CombatError si falta MP
+                self._emit(f"{actor.name} usa {actor.special_short_name} en {target.name}: "
+                           f"recupera {amount} HP.", "heal", target, amount)
             else:
-                kind = {"heal": "heal", "mp": "heal", "revive": "heal"}.get(eff.kind, eff.kind)
-                amount = eff.amount if eff.kind in ("heal", "revive") else 0
-                self._emit(describe_effect(eff), kind, eff.target, amount, actor)
-            i += 1
+                actor.stop_guard()
+                dmg = actor.special_attack(self.enemy, self._rng)
+                self._emit(f"{actor.name} usa {actor.special_short_name}: "
+                           f"{dmg} de daño a {self.enemy.name}.", "hit", self.enemy, dmg)
+        return self._act(action)
 
     def player_defend(self) -> List[str]:
         def action(actor: PartyMember) -> None:
@@ -296,14 +219,11 @@ class CombatSession:
                 if not 0 <= target_index < len(self.party):
                     raise CombatError("Ese aliado no existe.")
                 target = self.party[target_index]
-            item = self.hero.inventory.get(index)
-            if isinstance(item, Scroll):
-                raise InvalidItemError("Los pergaminos se leen fuera del combate.")
             before = target.hp
             actor.stop_guard()
             text = self.hero.use_item(index, target)  # puede lanzar InvalidItemError
             gained = target.hp - before
-            self._emit(text, "heal" if gained > 0 else "info", target, max(0, gained), actor)
+            self._emit(text, "heal" if gained > 0 else "info", target, max(0, gained))
         return self._act(action)
 
     player_use_potion = player_use_item  # nombre anterior, se mantiene por compatibilidad
@@ -365,7 +285,6 @@ class GameService:
             summaries.append({
                 "name": hero.name, "class_key": hero.CLASS_KEY, "class_name": hero.CLASS_NAME,
                 "level": hero.level, "floor": hero.floor, "companions": len(hero.companions),
-                "secrets": len(hero.secrets),
             })
         return summaries
 
@@ -387,7 +306,7 @@ class GameService:
         return Enemy(name, int(hp * k * self._party_hp_factor(party_size)), int(atk * k),
                      int(dfn * k), int(xp * k), int(gold * k), loot, level=floor)
 
-    def _spawn_boss(self, floor: int, party_size: int = 1, hero: Optional[Hero] = None) -> Boss:
+    def _spawn_boss(self, floor: int, party_size: int = 1) -> Boss:
         name, hp, atk, dfn, xp, gold = BOSS_TEMPLATES[(floor - 1) % len(BOSS_TEMPLATES)]
         if floor > len(BOSS_TEMPLATES):
             name = f"{name} Nv{floor}"
@@ -395,84 +314,37 @@ class GameService:
         loot = [(Weapon(f"Espada del Jefe +{floor}", 6 + 2 * floor, 60, "Botín de jefe"), 1.0),
                 (Potion("Poción Mayor", 90, 35, "Cura 90 HP"), 1.0),
                 (Ether("Éter Mayor", 50, 60, "Restaura 50 MP"), 0.5)]
-        scroll = self.random_scroll(hero) if hero else None
-        if scroll is not None:
-            loot.append((scroll, 0.6))
         return Boss(name, int(hp * k * self._party_hp_factor(party_size)), int(atk * k),
                     int(dfn * k), int(xp * k), int(gold * k), loot, level=floor)
-
-    def spawn_secret_boss(self, key: str, floor: int, party_size: int = 1) -> SecretBoss:
-        tpl = secret_template(key)
-        k = self._scale(max(1, floor - tpl.min_floor + 1)) * 1.0
-        loot = [(SECRET_GEAR[key](), 1.0), (Scroll(tpl.reward_scroll, 200), 1.0),
-                (Potion("Poción Mayor", 90, 35, "Cura 90 HP"), 1.0)]
-        return SecretBoss(tpl.key, tpl.art_key, tpl.name, int(tpl.hp * k * self._party_hp_factor(party_size)),
-                          int(tpl.atk * k), int(tpl.defense * k), int(tpl.xp * k), int(tpl.gold * k),
-                          loot, level=floor)
-
-    # ---- aprendizaje de habilidades
-    def random_scroll(self, hero: Optional[Hero]) -> Optional[Scroll]:
-        """Un pergamino de una habilidad que alguien del grupo todavía pueda aprender."""
-        if hero is None:
-            return None
-        pool = sorted({s.key for m in hero.party for s in m.learnable_skills()})
-        if not pool:
-            return None
-        key = self._rng.choice(pool)
-        return Scroll(key, max(60, get_skill(key).cost * 8))
-
-    def _shrine(self, hero: Hero) -> Event:
-        """Un santuario antiguo enseña una habilidad a alguien del grupo."""
-        candidates = [(m, s) for m in hero.party if m.is_alive for s in m.learnable_skills()]
-        if not candidates:
-            gold = 40 * hero.floor
-            hero.earn_gold(gold)
-            return Event("shrine", f"Un santuario antiguo brilla, pero ya no tiene nada que enseñarte. "
-                                   f"Dejas una ofrenda y recibes {gold} de oro.")
-        member, skill = self._rng.choice(candidates)
-        member.learn_skill(skill.key)
-        return Event("shrine", f"Un santuario antiguo susurra un secreto. ¡{member.name} aprende {skill.name}!")
-
-    def _secret_candidates(self, hero: Hero):
-        return [t for t in SECRET_BOSSES if t.min_floor <= hero.floor and t.key not in hero.secrets]
 
     def explore(self, hero: Hero) -> Event:
         size = len(hero.party)
         if hero.rooms_in_floor >= ROOMS_PER_FLOOR:
-            boss = self._spawn_boss(hero.floor, size, hero)
+            boss = self._spawn_boss(hero.floor, size)
             return Event("boss", f"¡La puerta del jefe se abre! {boss.name} bloquea tu camino.", boss)
-        candidates = self._secret_candidates(hero)
-        if candidates and self._rng.random() < SECRET_CHANCE:
-            tpl = self._rng.choice(candidates)
-            return Event("secret", tpl.intro, self.spawn_secret_boss(tpl.key, hero.floor, size))
         hero.advance_room()
         roll = self._rng.random()
-        if roll < 0.50:
+        if roll < 0.55:
             enemy = self._spawn_enemy(hero.floor, size)
             return Event("combat", f"Un {enemy.name} aparece de entre las sombras.", enemy)
-        if roll < 0.66:
+        if roll < 0.75:
             gold = self._rng.randint(10, 25) * hero.floor
             hero.earn_gold(gold)
             text = f"Encuentras un cofre con {gold} de oro."
-            found = self.random_scroll(hero) if self._rng.random() < 0.25 else None
-            if found is None and self._rng.random() < 0.4:
-                found = Potion("Poción Menor", 40, 15, "Cura 40 HP")
-            if found is not None:
+            if self._rng.random() < 0.4:
                 try:
-                    hero.inventory.add(found)
-                    text += f" ¡Y {found.name}!"
+                    hero.inventory.add(Potion("Poción Menor", 40, 15, "Cura 40 HP"))
+                    text += " ¡Y una Poción Menor!"
                 except InventoryFullError:
-                    text += f" Había {found.name}, pero tu inventario está lleno."
+                    text += " Había una poción, pero tu inventario está lleno."
             return Event("treasure", text)
-        if roll < 0.78:
+        if roll < 0.90:
             healed = 0
             for member in hero.party:
                 if member.is_alive:
                     healed += member.heal(int(member.max_hp * 0.3))
                     member.restore_mp(member.max_mp)
             return Event("fountain", f"Una fuente mágica cura a tu grupo ({healed} HP) y restaura su MP.")
-        if roll < 0.90:
-            return self._shrine(hero)
         # trampa: daña a todos pero nunca mata
         total = 0
         for member in hero.party:
@@ -496,18 +368,13 @@ class GameService:
             for member in hero.party:
                 if member.is_alive and member.gain_xp(enemy.xp_reward):
                     msgs.append(f"¡{member.name} SUBE A NIVEL {member.level}! HP y MP restaurados.")
-                for skill in member.pop_new_skills():
-                    msgs.append(f"¡{member.name} aprende {skill.name}!")
             for item in enemy.roll_loot(self._rng):
                 try:
                     hero.inventory.add(item_from_dict(item.to_dict()))
                     msgs.append(f"Botín: {item.name} ({item.describe()}).")
                 except InventoryFullError:
                     msgs.append(f"No cabe {item.name} en tu inventario y lo dejas atrás.")
-            if enemy.is_boss and getattr(enemy, "is_secret", False):
-                hero.defeat_secret(enemy.secret_key)
-                msgs.append(f"¡Has derrotado a un jefe secreto: {enemy.name}!")
-            elif enemy.is_boss:
+            if enemy.is_boss:
                 hero.next_floor()
                 msgs.append(f"¡Derrotaste al jefe! Avanzas al piso {hero.floor}.")
         else:
@@ -516,50 +383,12 @@ class GameService:
                 companion.revive(0.5)
                 companion.restore_mp(companion.max_mp)
             msgs.append(f"Has sido derrotado. Despiertas en el campamento y pierdes {lost} de oro.")
-        for member in hero.party:  # los caídos se levantan con 25% de HP; los efectos temporales terminan
-            member.clear_mods()
+        for member in hero.party:  # los caídos se levantan con 25% de HP
             if not member.is_alive:
                 member.revive(0.25)
                 msgs.append(f"{member.name} se levanta, malherido.")
         self.save_hero(hero)
         return msgs
-
-    # ----------------------------------------------- habilidades fuera de combate
-    @staticmethod
-    def castable_skills(member: PartyMember, party: List[PartyMember]) -> List[SkillOption]:
-        """Habilidades de `member` que sirven fuera del combate (curar, revivir, dar MP)."""
-        out = []
-        for skill in member.skills:
-            if not skill.usable_outside_combat:
-                continue
-            if member.mp < skill.cost:
-                out.append(SkillOption(skill, False, "MP insuficiente"))
-            elif not skill.has_valid_target(member, party):
-                out.append(SkillOption(skill, False, "Nadie lo necesita"))
-            else:
-                out.append(SkillOption(skill, True))
-        return out
-
-    def cast_skill(self, hero: Hero, caster_index: int, skill_key: str,
-                   target_index: Optional[int] = None) -> List[str]:
-        """Usa una habilidad de curación/revivir/MP fuera del combate."""
-        party = hero.party
-        if not 0 <= caster_index < len(party):
-            raise PartyError("Ese miembro del grupo no existe.")
-        caster = party[caster_index]
-        skill = get_skill(skill_key)
-        if not skill.usable_outside_combat:
-            raise SkillError(f"{skill.name} solo se puede usar en combate.")
-        if not caster.is_alive:
-            raise CombatError(f"{caster.name} está caído.")
-        ally = None
-        if skill.target in ("ally", "fallen"):
-            if target_index is None or not 0 <= target_index < len(party):
-                raise SkillError("Elige a un aliado.")
-            ally = party[target_index]
-        effects = caster.use_skill(skill_key, None, party, ally, self._rng)
-        self.save_hero(hero)
-        return [f"{caster.name} usa {skill.name}."] + [describe_effect(e) for e in effects]
 
     # ---------------------------------------------------- tienda / items
     @staticmethod
